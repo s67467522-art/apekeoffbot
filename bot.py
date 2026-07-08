@@ -10,7 +10,7 @@ import sys
 import json
 import logging
 import asyncio
-import base64
+import random
 from datetime import datetime
 from urllib.parse import urlparse
 from typing import Optional, Tuple
@@ -51,20 +51,120 @@ SUPPORTED_FORMATS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif']
 MAX_IMAGE_SIZE = 20 * 1024 * 1024
 DEFAULT_QUALITY = 50
 
-# ============= IMAGE GENERATION FUNCTIONS =============
+# ============= WORKING IMAGE GENERATION FUNCTIONS =============
+
+async def generate_image_pollinations(prompt: str) -> Optional[bytes]:
+    """Generate image using Pollinations.ai (Completely Free, No API Key)."""
+    try:
+        # Clean the prompt for URL
+        clean_prompt = prompt.replace(' ', '%20').replace('&', '%26')
+        
+        # Pollinations.ai API - free and reliable
+        url = f"https://image.pollinations.ai/prompt/{clean_prompt}"
+        params = {
+            "width": 512,
+            "height": 512,
+            "nologo": "true",
+            "seed": random.randint(1, 999999)
+        }
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        logger.info(f"Generating image with Pollinations: {prompt[:50]}...")
+        response = requests.get(url, params=params, headers=headers, timeout=45)
+        
+        if response.status_code == 200 and response.content:
+            # Check if we got an image (not HTML)
+            content_type = response.headers.get('content-type', '')
+            if 'image' in content_type:
+                logger.info("✅ Image generated with Pollinations.ai")
+                return response.content
+            else:
+                logger.warning(f"Pollinations returned non-image content: {content_type}")
+                return None
+        else:
+            logger.error(f"Pollinations.ai failed: {response.status_code}")
+            return None
+    except requests.exceptions.Timeout:
+        logger.error("Pollinations.ai timeout")
+        return None
+    except Exception as e:
+        logger.error(f"Error in generate_image_pollinations: {e}")
+        return None
+
+async def generate_image_artificial(prompt: str) -> Optional[bytes]:
+    """Generate image using Artificial API (Free)."""
+    try:
+        # Artificial API - another free image generation service
+        url = "https://api.artificialstudio.ai/generate"
+        payload = {
+            "prompt": prompt,
+            "width": 512,
+            "height": 512,
+            "steps": 20
+        }
+        
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0"
+        }
+        
+        logger.info(f"Generating image with Artificial Studio: {prompt[:50]}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=45)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('image'):
+                # The image is base64 encoded
+                image_data = base64.b64decode(data['image'])
+                logger.info("✅ Image generated with Artificial Studio")
+                return image_data
+        return None
+    except Exception as e:
+        logger.error(f"Error in generate_image_artificial: {e}")
+        return None
+
+async def generate_image_lexica(prompt: str) -> Optional[bytes]:
+    """Generate image using Lexica API (Free)."""
+    try:
+        url = "https://lexica.art/api/infinite-prompt"
+        payload = {"prompt": prompt}
+        
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0"
+        }
+        
+        logger.info(f"Generating image with Lexica: {prompt[:50]}...")
+        response = requests.post(url, json=payload, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('images') and len(data['images']) > 0:
+                image_url = data['images'][0]['url']
+                # Download the actual image
+                img_response = requests.get(image_url, timeout=30)
+                if img_response.status_code == 200:
+                    logger.info("✅ Image generated with Lexica")
+                    return img_response.content
+        return None
+    except Exception as e:
+        logger.error(f"Error in generate_image_lexica: {e}")
+        return None
 
 async def generate_image_huggingface(prompt: str) -> Optional[bytes]:
-    """Generate image using Hugging Face's Stable Diffusion (Free)."""
+    """Generate image using Hugging Face (if token available)."""
     if not HF_TOKEN:
         return None
     
     try:
-        # Try multiple free models
+        # Try different models
         models = [
+            "black-forest-labs/FLUX.1-dev",
             "runwayml/stable-diffusion-v1-5",
-            "stabilityai/stable-diffusion-2-1",
-            "prompthero/openjourney",
-            "dreamlike-art/dreamlike-photoreal-2.0"
+            "stabilityai/stable-diffusion-2-1"
         ]
         
         for model in models:
@@ -74,28 +174,28 @@ async def generate_image_huggingface(prompt: str) -> Optional[bytes]:
                 payload = {
                     "inputs": prompt,
                     "parameters": {
-                        "negative_prompt": "low quality, blurry, distorted, ugly",
+                        "negative_prompt": "low quality, blurry, distorted",
                         "num_inference_steps": 20,
                     }
                 }
                 
-                response = requests.post(API_URL, headers=headers, json=payload, timeout=45)
+                response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
                 
                 if response.status_code == 200:
-                    logger.info(f"Image generated with model: {model}")
+                    logger.info(f"✅ Image generated with Hugging Face: {model}")
                     return response.content
                 elif response.status_code == 503:
-                    # Model loading, wait and retry
+                    # Model loading - wait and retry once
                     await asyncio.sleep(10)
                     response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
                     if response.status_code == 200:
-                        logger.info(f"Image generated with model after wait: {model}")
+                        logger.info(f"✅ Image generated with Hugging Face (after wait): {model}")
                         return response.content
                 else:
-                    logger.warning(f"Model {model} failed: {response.status_code}")
+                    logger.warning(f"Hugging Face model {model} failed: {response.status_code}")
                     continue
             except Exception as e:
-                logger.warning(f"Error with model {model}: {e}")
+                logger.warning(f"Error with Hugging Face model {model}: {e}")
                 continue
         
         return None
@@ -103,72 +203,30 @@ async def generate_image_huggingface(prompt: str) -> Optional[bytes]:
         logger.error(f"Error in generate_image_huggingface: {e}")
         return None
 
-async def generate_image_pollinations(prompt: str) -> Optional[bytes]:
-    """Generate image using Pollinations.ai (Completely Free, No API Key)."""
-    try:
-        # Pollinations.ai is a free image generation API
-        url = f"https://image.pollinations.ai/prompt/{prompt.replace(' ', '%20')}"
-        params = {
-            "width": 512,
-            "height": 512,
-            "nologo": "true",
-            "seed": "random"
-        }
-        
-        response = requests.get(url, params=params, timeout=30)
-        if response.status_code == 200:
-            logger.info("Image generated with Pollinations.ai")
-            return response.content
-        else:
-            logger.error(f"Pollinations.ai failed: {response.status_code}")
-            return None
-    except Exception as e:
-        logger.error(f"Error in generate_image_pollinations: {e}")
-        return None
-
-async def generate_image_lexica(prompt: str) -> Optional[bytes]:
-    """Generate image using Lexica API (Free)."""
-    try:
-        url = "https://lexica.art/api/infinite-prompt"
-        payload = {"prompt": prompt}
-        
-        response = requests.post(url, json=payload, timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get("images") and len(data["images"]) > 0:
-                image_url = data["images"][0]["url"]
-                image_response = requests.get(image_url, timeout=30)
-                if image_response.status_code == 200:
-                    logger.info("Image generated with Lexica")
-                    return image_response.content
-        return None
-    except Exception as e:
-        logger.error(f"Error in generate_image_lexica: {e}")
-        return None
-
 async def generate_image(prompt: str) -> Optional[bytes]:
-    """Generate image using multiple free services with fallback."""
+    """Generate image using multiple services with fallback."""
     
-    # Try Hugging Face first (if token is set)
-    if HF_TOKEN:
-        logger.info("Attempting image generation with Hugging Face...")
-        result = await generate_image_huggingface(prompt)
-        if result:
-            return result
+    # Try services in order of reliability
+    services = [
+        ("Pollinations.ai", generate_image_pollinations),
+        ("Hugging Face", generate_image_huggingface),
+        ("Lexica", generate_image_lexica),
+        ("Artificial Studio", generate_image_artificial)
+    ]
     
-    # Try Pollinations.ai (No API key required)
-    logger.info("Attempting image generation with Pollinations.ai...")
-    result = await generate_image_pollinations(prompt)
-    if result:
-        return result
+    for name, service_func in services:
+        try:
+            logger.info(f"🔄 Trying {name}...")
+            result = await service_func(prompt)
+            if result:
+                return result
+            # Small delay between attempts
+            await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"Service {name} error: {e}")
+            continue
     
-    # Try Lexica as final fallback
-    logger.info("Attempting image generation with Lexica...")
-    result = await generate_image_lexica(prompt)
-    if result:
-        return result
-    
-    logger.error("All image generation methods failed")
+    logger.error("❌ All image generation services failed")
     return None
 
 # ============= URL SHORTENER =============
@@ -274,13 +332,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Hello {user.first_name}! I'm your all-in-one utility bot.
 
-🎨 **Image Generation** - Create images from text (FREE, no API key needed!)
+🎨 **Image Generation** - Create images from text (FREE!)
 🔄 **Image Conversion** - Convert between formats
 🔗 **URL Shortening** - Shorten long URLs
 📏 **Image Resizing** - Resize images
 🗜️ **Image Compression** - Reduce file sizes
 
-⚠️ **Note:** Image generation uses free services. Quality may vary.
+⚠️ **Note:** Image generation uses multiple free services.
+If one fails, I'll automatically try another!
 
 Type /help to see all commands!
 """
@@ -303,7 +362,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 **Image Generation:**
 🎨 `/image <prompt>` - Generate AI image (FREE)
-   Example: `/image a beautiful sunset`
+   Example: `/image a majestic lion with golden mane`
+   Example: `/image a beautiful sunset over mountains`
 
 **Image Processing (reply to image):**
 🔄 `/convert <format>` - Convert format (png, jpg, webp, etc.)
@@ -315,12 +375,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ℹ️ `/info` - Bot statistics
 🆘 `/help` - Show this menu
 
-**Tips for better image generation:**
-• Be specific: "a lion with golden mane in sunset"
-• Include style: "photorealistic", "digital art", "cinematic"
-• Add quality keywords: "4k", "high quality", "detailed"
+**Tips for better results:**
+• Be specific: "lion with golden mane in sunset"
+• Add style: "photorealistic", "digital art"
+• Use quality keywords: "4k", "high quality"
 
-*Image generation is powered by free AI services*
+*I automatically try multiple image generation services!*
 """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -329,9 +389,9 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "🎨 **Please provide a prompt!**\n\n"
-            "Example: `/image a cat wearing a hat`\n"
-            "Example: `/image a beautiful lion with golden mane, sunset`\n\n"
-            "💡 **Tip:** Add style keywords like 'photorealistic' or 'digital art' for better results!",
+            "Example: `/image a lion with golden mane`\n"
+            "Example: `/image a beautiful sunset, photorealistic`\n\n"
+            "💡 **Pro Tip:** Be specific and include style keywords!",
             parse_mode='Markdown'
         )
         return
@@ -339,13 +399,13 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = ' '.join(context.args)
     status_msg = await update.message.reply_text(
         f"🎨 **Generating image...**\n\n"
-        f"*Prompt:* {prompt}\n"
-        f"⏳ This may take 15-30 seconds...\n\n"
-        f"🔄 Trying multiple services...",
+        f"📝 *Prompt:* {prompt}\n"
+        f"⏳ Trying multiple AI services...",
         parse_mode='Markdown'
     )
     
     try:
+        # Try to generate the image
         image_data = await generate_image(prompt)
         
         if image_data:
@@ -353,25 +413,24 @@ async def image_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(
                 photo=io.BytesIO(image_data),
                 caption=f"✅ **Generated:** {prompt}\n\n"
-                        f"⚡ *Powered by AI (Multiple Services)*",
+                        f"⚡ *Powered by AI*",
                 parse_mode='Markdown'
             )
         else:
             await status_msg.edit_text(
                 "❌ **Failed to generate image.**\n\n"
-                "All image generation services are currently unavailable.\n\n"
-                "**Possible reasons:**\n"
-                "• Services are rate-limited (try again in 1-2 minutes)\n"
-                "• Prompt might be too complex (try simpler words)\n"
-                "• Free API limits reached (try again later)\n\n"
-                "💡 **Try:** `/image a simple sunset` first to test."
+                "All AI services are currently busy or rate-limited.\n\n"
+                "**What to try:**\n"
+                "• Wait 1-2 minutes and try again\n"
+                "• Use a simpler prompt (e.g., 'a lion')\n"
+                "• Try different keywords\n\n"
+                "🔄 The bot automatically retries with multiple services!"
             )
     except Exception as e:
         logger.error(f"Image generation error: {e}")
         await status_msg.edit_text(
             "❌ **Error generating image.**\n\n"
-            "An unexpected error occurred.\n"
-            "Please try again with a simpler prompt."
+            "Please try again in a few minutes."
         )
 
 async def shorten_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -564,22 +623,19 @@ async def info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📊 **Status:** 🟢 Online
 
 **Features:**
-• 🎨 AI Image Generation (FREE - Multiple Services)
+• 🎨 AI Image Generation (Multiple FREE services)
 • 🔄 Image Conversion (PNG, JPG, WEBP, BMP, GIF)
 • 🔗 URL Shortening (TinyURL, is.gd)
 • 📏 Image Resizing
 • 🗜️ Image Compression
 
-**Image Generation Sources:**
-1. Hugging Face (if token set)
-2. Pollinations.ai (FREE, no API key)
-3. Lexica AI (FREE, no API key)
+**Image Services Used:**
+• Pollinations.ai (FREE, no API key)
+• Hugging Face (if token set)
+• Lexica (FREE, no API key)
+• Artificial Studio (FREE, no API key)
 
-**About:**
-Free and useful tools for Telegram users.
-All image generation is provided by free AI services.
-
-*Bot is active and ready to help!*
+**Status:** ✅ Active and ready!
 """
     await update.message.reply_text(info_text, parse_mode='Markdown')
 
@@ -625,7 +681,7 @@ def main():
     
     logger.info("🚀 Apeke Off Bot is starting...")
     logger.info("🔄 Running with long polling (Railway compatible)")
-    logger.info("ℹ️ Image Generation: Multiple free services enabled")
+    logger.info("ℹ️ Multiple image generation services enabled")
     
     # Use polling
     application.run_polling(allowed_updates=Update.ALL_TYPES)
